@@ -1,26 +1,162 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>DuneScape</title>
-    
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
-    
-    <style>
-        body { margin: 0; overflow: hidden; }
-        canvas { display: block; }
-    </style>
-</head>
-<body>
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+// File: src/Loader.js
+
+export default class Loader {
+    constructor(appContainer) {
+        this.appContainer = appContainer;
+        this.assets = [];
+        this.totalAssets = 0;
+        this.loadedAssets = 0;
+        
+        // No need for a separate Debugger instance, we can just use console for initial loading.
+        // The service worker can catch unhandled errors before the app even starts.
+        this.catchGlobalErrors();
+
+        this.injectStyles();
+        this.initDOM();
+        console.log("Loading screen initialized.");
+    }
+
+    /**
+     * Creates and injects the loader's CSS styles directly into the document's head.
+     */
+    injectStyles() {
+        const styles = `
+            /* Basic reset for a full-screen experience */
+            html, body {
+                margin: 0;
+                padding: 0;
+                width: 100vw;
+                height: 100vh;
+                overflow: hidden;
+                background-color: #000;
+                font-family: sans-serif;
             }
+            #app { width: 100%; height: 100%; }
+
+            /* --- Loading Screen Styles --- */
+            #loading-screen {
+                position: fixed; top: 0; left: 0;
+                width: 100%; height: 100%;
+                background-color: #0c0a09; /* Dark, earthy background */
+                display: flex; flex-direction: column;
+                justify-content: center; align-items: center;
+                transition: opacity 1.5s ease-out;
+                z-index: 1000;
+            }
+            .game-title {
+                font-family: 'Cinzel Decorative', cursive;
+                font-size: clamp(2rem, 10vw, 4.5rem); /* Responsive font size */
+                color: #eaddc0; /* Sandy gold color */
+                text-shadow: 2px 2px 8px rgba(255, 165, 0, 0.7); /* Soft orange glow */
+                margin-bottom: 40px;
+            }
+            .progress-container {
+                width: 60%; max-width: 500px;
+                background-color: #2c1e10; /* Dark brown track */
+                border: 2px solid #5a442a;
+                border-radius: 8px; padding: 4px;
+            }
+            .progress-bar {
+                width: 0%; height: 20px;
+                background: linear-gradient(90deg, #ffc977, #d49c4b); /* Golden gradient */
+                border-radius: 4px;
+                transition: width 0.1s linear;
+            }
+            .progress-log {
+                margin-top: 15px; color: #a39b8b; /* Faded text color */
+                font-family: monospace; font-size: 0.9em;
+                height: 20px; /* Reserve space to prevent layout shift */
+            }
+        `;
+        const styleSheet = document.createElement("style");
+        styleSheet.type = "text/css";
+        styleSheet.innerText = styles;
+        document.head.appendChild(styleSheet);
+    }
+    
+    /**
+     * Creates and injects the loading screen HTML into the main app container.
+     */
+    initDOM() {
+        this.appContainer.innerHTML = `
+            <div id="loading-screen">
+                <h1 class="game-title">DuneScape</h1>
+                <div class="progress-container">
+                    <div class="progress-bar"></div>
+                </div>
+                <div class="progress-log">Initializing...</div>
+            </div>
+        `;
+        this.progressBar = document.querySelector('.progress-bar');
+        this.progressLog = document.querySelector('.progress-log');
+        this.loadingScreen = document.querySelector('#loading-screen');
+    }
+
+    /**
+     * Pauses execution for a short time to prevent freezing the browser.
+     * This gives the browser time to render UI updates (like the progress bar).
+     * @param {number} ms - Milliseconds to wait.
+     */
+    yield(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Starts the asset loading process.
+     * @param {string[]} assetManifest - An array of asset paths to load.
+     * @returns {Promise<void>} A promise that resolves when all assets are loaded.
+     */
+    async load(assetManifest) {
+        this.assets = assetManifest;
+        this.totalAssets = this.assets.length;
+        console.log(`Unpacking ${this.totalAssets} files...`);
+
+        try {
+            for (const assetPath of this.assets) {
+                // We update the progress *before* loading the asset
+                this.updateProgress(assetPath);
+                
+                // This is the key to preventing crashes. We wait a tiny amount of time
+                // after each file. This lets the browser "breathe" and render updates.
+                await this.yield(16); // ~1 frame at 60fps
+                
+                this.loadedAssets++;
+            }
+
+            this.progressLog.textContent = 'Finalizing...';
+            this.progressBar.style.width = '100%';
+            console.log("All files unpacked.");
+            
+            await this.yield(500); // Wait a moment before fading out
+            this.destroy();
+
+        } catch (error) {
+            console.error(`A critical error occurred during unpacking: ${error.message}`);
+            this.progressLog.textContent = `ERROR! Check console for details.`;
         }
-    </script>
-    <script type="module" src="main.js"></script>
-</body>
-</html>
+    }
+    
+    updateProgress(currentAssetPath) {
+        const progressPercentage = (this.loadedAssets / this.totalAssets) * 100;
+        this.progressBar.style.width = `${progressPercentage}%`;
+        this.progressLog.textContent = `Unpacking: ${currentAssetPath}...`;
+    }
+
+    destroy() {
+        this.loadingScreen.style.opacity = '0';
+        this.loadingScreen.addEventListener('transitionend', () => {
+            this.loadingScreen.remove();
+        }, { once: true });
+    }
+    
+    catchGlobalErrors() {
+        window.onerror = (message, source, lineno, colno, error) => {
+            console.error(`UNCAUGHT ERROR: ${message}\nSource: ${source}:${lineno}`);
+            // In a real build, you might want to send this error to a logging service.
+            if (this.progressLog) {
+                 this.progressLog.textContent = 'A critical error occurred!';
+            }
+            return true;
+        };
+    }
+}
