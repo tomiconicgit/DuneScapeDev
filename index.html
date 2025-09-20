@@ -1,162 +1,387 @@
-// File: src/Loader.js
-
-export default class Loader {
-    constructor(appContainer) {
-        this.appContainer = appContainer;
-        this.assets = [];
-        this.totalAssets = 0;
-        this.loadedAssets = 0;
-        
-        // No need for a separate Debugger instance, we can just use console for initial loading.
-        // The service worker can catch unhandled errors before the app even starts.
-        this.catchGlobalErrors();
-
-        this.injectStyles();
-        this.initDOM();
-        console.log("Loading screen initialized.");
-    }
-
-    /**
-     * Creates and injects the loader's CSS styles directly into the document's head.
-     */
-    injectStyles() {
-        const styles = `
-            /* Basic reset for a full-screen experience */
-            html, body {
-                margin: 0;
-                padding: 0;
-                width: 100vw;
-                height: 100vh;
-                overflow: hidden;
-                background-color: #000;
-                font-family: sans-serif;
-            }
-            #app { width: 100%; height: 100%; }
-
-            /* --- Loading Screen Styles --- */
-            #loading-screen {
-                position: fixed; top: 0; left: 0;
-                width: 100%; height: 100%;
-                background-color: #0c0a09; /* Dark, earthy background */
-                display: flex; flex-direction: column;
-                justify-content: center; align-items: center;
-                transition: opacity 1.5s ease-out;
-                z-index: 1000;
-            }
-            .game-title {
-                font-family: 'Cinzel Decorative', cursive;
-                font-size: clamp(2rem, 10vw, 4.5rem); /* Responsive font size */
-                color: #eaddc0; /* Sandy gold color */
-                text-shadow: 2px 2px 8px rgba(255, 165, 0, 0.7); /* Soft orange glow */
-                margin-bottom: 40px;
-            }
-            .progress-container {
-                width: 60%; max-width: 500px;
-                background-color: #2c1e10; /* Dark brown track */
-                border: 2px solid #5a442a;
-                border-radius: 8px; padding: 4px;
-            }
-            .progress-bar {
-                width: 0%; height: 20px;
-                background: linear-gradient(90deg, #ffc977, #d49c4b); /* Golden gradient */
-                border-radius: 4px;
-                transition: width 0.1s linear;
-            }
-            .progress-log {
-                margin-top: 15px; color: #a39b8b; /* Faded text color */
-                font-family: monospace; font-size: 0.9em;
-                height: 20px; /* Reserve space to prevent layout shift */
-            }
-        `;
-        const styleSheet = document.createElement("style");
-        styleSheet.type = "text/css";
-        styleSheet.innerText = styles;
-        document.head.appendChild(styleSheet);
-    }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Universal GLB Tool</title>
     
-    /**
-     * Creates and injects the loading screen HTML into the main app container.
-     */
-    initDOM() {
-        this.appContainer.innerHTML = `
-            <div id="loading-screen">
-                <h1 class="game-title">DuneScape</h1>
-                <div class="progress-container">
-                    <div class="progress-bar"></div>
-                </div>
-                <div class="progress-log">Initializing...</div>
-            </div>
-        `;
-        this.progressBar = document.querySelector('.progress-bar');
-        this.progressLog = document.querySelector('.progress-log');
-        this.loadingScreen = document.querySelector('#loading-screen');
-    }
+    <meta name="theme-color" content="#ffffff"/>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192x192.png">
 
-    /**
-     * Pauses execution for a short time to prevent freezing the browser.
-     * This gives the browser time to render UI updates (like the progress bar).
-     * @param {number} ms - Milliseconds to wait.
-     */
-    yield(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    /**
-     * Starts the asset loading process.
-     * @param {string[]} assetManifest - An array of asset paths to load.
-     * @returns {Promise<void>} A promise that resolves when all assets are loaded.
-     */
-    async load(assetManifest) {
-        this.assets = assetManifest;
-        this.totalAssets = this.assets.length;
-        console.log(`Unpacking ${this.totalAssets} files...`);
-
-        try {
-            for (const assetPath of this.assets) {
-                // We update the progress *before* loading the asset
-                this.updateProgress(assetPath);
-                
-                // This is the key to preventing crashes. We wait a tiny amount of time
-                // after each file. This lets the browser "breathe" and render updates.
-                await this.yield(16); // ~1 frame at 60fps
-                
-                this.loadedAssets++;
-            }
-
-            this.progressLog.textContent = 'Finalizing...';
-            this.progressBar.style.width = '100%';
-            console.log("All files unpacked.");
-            
-            await this.yield(500); // Wait a moment before fading out
-            this.destroy();
-
-        } catch (error) {
-            console.error(`A critical error occurred during unpacking: ${error.message}`);
-            this.progressLog.textContent = `ERROR! Check console for details.`;
+    <style>
+        :root {
+            --viewer-bg: #ffffff;
+            --ui-bg: #f0f2f5;
+            --panel-bg: #ffffff;
+            --primary-color: #007aff;
+            --text-color: #1d1d1f;
+            --border-color: #d2d2d7;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+            --error-color: #d93025;
+            --warn-color: #f5a623;
         }
-    }
-    
-    updateProgress(currentAssetPath) {
-        const progressPercentage = (this.loadedAssets / this.totalAssets) * 100;
-        this.progressBar.style.width = `${progressPercentage}%`;
-        this.progressLog.textContent = `Unpacking: ${currentAssetPath}...`;
-    }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            width: 100%; height: 100%; overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex; flex-direction: column; background-color: var(--ui-bg);
+        }
+        #viewer-container {
+            flex-grow: 1; position: relative; min-height: 200px;
+        }
+        #ui-container {
+            flex-shrink: 0; height: 45vh; background-color: var(--ui-bg);
+            padding: 1rem; overflow-y: auto; display: flex; justify-content: center;
+        }
+        #ui-content {
+            width: 100%; max-width: 1000px; display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+        .card {
+            background-color: var(--panel-bg); border-radius: 12px;
+            padding: 1.25rem; box-shadow: 0 4px 12px var(--shadow-color);
+            display: flex; flex-direction: column; gap: 0.75rem;
+        }
+        .card h2 {
+            font-size: 1rem; color: var(--text-color); padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .btn, .file-label, select {
+            display: block; width: 100%; padding: 0.8rem; border: 1px solid var(--border-color);
+            border-radius: 8px; font-size: 0.9rem; font-weight: 500;
+            text-align: center; cursor: pointer; transition: all 0.2s ease;
+            background-color: #e9e9eb; color: var(--text-color);
+        }
+        select { text-align: left; -webkit-appearance: none; appearance: none;
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
+            background-repeat: no-repeat; background-position: right 0.75rem center; background-size: 16px 12px;
+        }
+        .btn { border: none; background-color: var(--primary-color); color: white; font-weight: 600; }
+        .file-label:hover, select:hover { background-color: #dcdce1; }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0, 122, 255, 0.2); }
+        .btn:disabled, .file-label.disabled, select:disabled {
+            background-color: #e9e9eb !important; color: #8e8e93 !important; cursor: not-allowed;
+            transform: none; box-shadow: none; opacity: 0.7;
+        }
+        .card label.field-label { font-size: 0.8rem; color: #636366; margin-bottom: -5px; }
+        #status-log {
+            font-size: 0.85rem; text-align: center; color: #636366; padding: 0.5rem;
+            background-color: #e9e9eb; border-radius: 6px; margin-top: auto;
+            transition: all 0.3s ease;
+        }
+        #status-log.error { background-color: #fdd8d6; color: var(--error-color); }
+        #status-log.warn { background-color: #fff4d8; color: #b87a00; }
+        .debug-panel { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #636366; }
+        #loader {
+            position: absolute; top: 50%; left: 50%; width: 40px; height: 40px;
+            border: 4px solid #dcdce1; border-top-color: var(--primary-color);
+            border-radius: 50%; animation: spin 1s linear infinite; transform: translate(-50%, -50%);
+        }
+        #loader.hidden { display: none; }
+        @keyframes spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+    </style>
 
-    destroy() {
-        this.loadingScreen.style.opacity = '0';
-        this.loadingScreen.addEventListener('transitionend', () => {
-            this.loadingScreen.remove();
-        }, { once: true });
-    }
+    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+    { "imports": {
+        "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.158.0/examples/jsm/"
+    } }
+    </script>
+</head>
+<body>
+
+    <div id="viewer-container">
+        <div id="loader" class="hidden"></div>
+    </div>
+
+    <div id="ui-container">
+        <div id="ui-content">
+            <div class="card">
+                <h2>1. Load & View</h2>
+                <label for="model-input" class="file-label">Choose .glb File</label>
+                <input type="file" id="model-input" accept=".glb" hidden>
+                <div class="debug-panel">
+                    <input type="checkbox" id="debug-box-toggle">
+                    <label for="debug-box-toggle">Show Debug Bounding Box</label>
+                </div>
+            </div>
+            <div class="card">
+                <h2>2. Apply Texture</h2>
+                <label for="mesh-select" class="field-label">Target Mesh</label>
+                <select id="mesh-select" disabled><option>Load a model first</option></select>
+                <label for="texture-input" class="file-label disabled">Choose Image</label>
+                <input type="file" id="texture-input" accept="image/*" hidden disabled>
+            </div>
+            <div class="card">
+                <h2>3. Process & Export</h2>
+                <button id="process-btn" class="btn" disabled>Remove Rig & T-Pose</button>
+                <button id="export-btn" class="btn" disabled>Export as .glb</button>
+                <div id="status-log">Welcome! Load a GLB model to start.</div>
+            </div>
+        </div>
+    </div>
     
-    catchGlobalErrors() {
-        window.onerror = (message, source, lineno, colno, error) => {
-            console.error(`UNCAUGHT ERROR: ${message}\nSource: ${source}:${lineno}`);
-            // In a real build, you might want to send this error to a logging service.
-            if (this.progressLog) {
-                 this.progressLog.textContent = 'A critical error occurred!';
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+        let scene, camera, renderer, controls;
+        let currentModel = null, originalModel = null, boundingBoxHelper = null;
+
+        const viewerContainer = document.getElementById('viewer-container');
+        const modelInput = document.getElementById('model-input');
+        const textureInput = document.getElementById('texture-input');
+        const processBtn = document.getElementById('process-btn');
+        const exportBtn = document.getElementById('export-btn');
+        const textureLabel = document.querySelector('label[for="texture-input"]');
+        const statusLog = document.getElementById('status-log');
+        const loaderElement = document.getElementById('loader');
+        const meshSelect = document.getElementById('mesh-select');
+        const debugToggle = document.getElementById('debug-box-toggle');
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+            scene.fog = new THREE.Fog(0xffffff, 10, 70);
+
+            camera = new THREE.PerspectiveCamera(50, viewerContainer.clientWidth / viewerContainer.clientHeight, 0.1, 2000);
+            camera.position.set(0, 1.5, 5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(viewerContainer.clientWidth, viewerContainer.clientHeight);
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1;
+            viewerContainer.appendChild(renderer.domElement);
+            
+            scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+            scene.add(new THREE.DirectionalLight(0xffffff, 2.5).position.set(5, 10, 7.5));
+            scene.add(new THREE.GridHelper(50, 50, 0xcccccc, 0xcccccc));
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.target.set(0, 1, 0);
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function logStatus(message, level = 'info') {
+            statusLog.textContent = message;
+            statusLog.className = 'status-log';
+            if (level === 'error') statusLog.classList.add('error');
+            if (level === 'warn') statusLog.classList.add('warn');
+        }
+
+        function resetUI() {
+            textureInput.disabled = true; textureLabel.classList.add('disabled');
+            processBtn.disabled = true; exportBtn.disabled = true;
+            meshSelect.disabled = true;
+            meshSelect.innerHTML = '<option>Load a model first</option>';
+        }
+
+        function calculateSafeBoundingBox(object) {
+            const mainBox = new THREE.Box3();
+            let skippedMeshes = 0;
+
+            object.traverse((child) => {
+                // --- THE FIX ---
+                // We now check for SkinnedMesh as well as regular Mesh.
+                if ((child.isMesh || child.isSkinnedMesh) && child.geometry) {
+                    try {
+                        const meshBox = new THREE.Box3().setFromObject(child);
+                        if (meshBox.min.isFinite() && meshBox.max.isFinite()) {
+                            mainBox.union(meshBox);
+                        } else {
+                            skippedMeshes++;
+                            console.warn('Skipping mesh with invalid bounding box:', child.name || '[unnamed]');
+                        }
+                    } catch (e) {
+                        skippedMeshes++;
+                        console.warn(`Could not process geometry for mesh "${child.name || '[unnamed]'}". Skipping.`, e);
+                    }
+                }
+            });
+            return { box: mainBox, skipped: skippedMeshes };
+        }
+
+        function frameObject(object) {
+            const { box, skipped } = calculateSafeBoundingBox(object);
+            if (skipped > 0) logStatus(`Model loaded. ${skipped} invalid mesh(es) were skipped.`, 'warn');
+
+            if (box.isEmpty()) {
+                logStatus("Error: Model contains no valid/visible geometry.", 'error');
+                if (boundingBoxHelper) scene.remove(boundingBoxHelper);
+                return false;
             }
+
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            if (boundingBoxHelper) scene.remove(boundingBoxHelper);
+            boundingBoxHelper = new THREE.Box3Helper(box, 0x007aff);
+            boundingBoxHelper.visible = debugToggle.checked;
+            scene.add(boundingBoxHelper);
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fitHeightDistance = maxDim / (2 * Math.tan(Math.PI * camera.fov / 360));
+            const fitWidthDistance = fitHeightDistance / camera.aspect;
+            const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.2;
+
+            controls.target.copy(center);
+            camera.position.copy(center).add(new THREE.Vector3(0, 0, distance));
+            
+            const camLimit = Math.max(distance * 2, 100); // Set a reasonable limit
+            camera.near = Math.max(0.1, camLimit / 1000);
+            camera.far = camLimit * 2;
+            camera.updateProjectionMatrix();
+            controls.update();
             return true;
-        };
-    }
-}
+        }
+        
+        function populateMeshSelector(model) {
+            const meshes = [];
+            model.traverse(child => {
+                // --- THE FIX ---
+                // Also check for SkinnedMesh here to populate the dropdown correctly.
+                if (child.isMesh || child.isSkinnedMesh) {
+                    meshes.push({ name: child.name || `Unnamed Mesh ${meshes.length + 1}`, uuid: child.uuid });
+                }
+            });
+
+            meshSelect.innerHTML = '';
+            if (meshes.length === 0) {
+                meshSelect.innerHTML = '<option>No meshes found</option>'; return;
+            }
+            meshes.forEach(mesh => {
+                const option = document.createElement('option');
+                option.value = mesh.uuid;
+                option.textContent = mesh.name;
+                meshSelect.appendChild(option);
+            });
+            meshSelect.disabled = false;
+        }
+
+        modelInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            if (currentModel) scene.remove(currentModel);
+            resetUI();
+            logStatus("Loading model...");
+            loaderElement.classList.remove('hidden');
+
+            const url = URL.createObjectURL(file);
+            new GLTFLoader().load(url, gltf => {
+                const object = gltf.scene;
+
+                scene.add(object);
+                if (frameObject(object)) {
+                    originalModel = object;
+                    currentModel = object;
+                    populateMeshSelector(currentModel);
+                    if (!statusLog.classList.contains('warn')) logStatus("Model loaded successfully.");
+                    textureInput.disabled = false; textureLabel.classList.remove('disabled');
+                    processBtn.disabled = false;
+                } else {
+                    scene.remove(object);
+                    originalModel = null;
+                    currentModel = null;
+                }
+                loaderElement.classList.add('hidden');
+                URL.revokeObjectURL(url);
+            }, undefined, error => {
+                loaderElement.classList.add('hidden');
+                logStatus("Error: Could not load the GLB file.", 'error');
+                console.error(error);
+            });
+        });
+        
+        textureInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            const selectedMeshUuid = meshSelect.value;
+            if (!file || !currentModel || !selectedMeshUuid) return;
+            logStatus(`Applying texture...`);
+
+            const url = URL.createObjectURL(file);
+            new THREE.TextureLoader().load(url, texture => {
+                texture.encoding = THREE.sRGBEncoding;
+                texture.flipY = false;
+                const targetMesh = currentModel.getObjectByProperty('uuid', selectedMeshUuid);
+                if (targetMesh && (targetMesh.isMesh || targetMesh.isSkinnedMesh)) {
+                    if (Array.isArray(targetMesh.material)) targetMesh.material.forEach(mat => mat.map = texture);
+                    else targetMesh.material.map = texture;
+                    targetMesh.material.needsUpdate = true;
+                    logStatus(`Texture applied to ${targetMesh.name || 'Unnamed Mesh'}.`);
+                } else {
+                    logStatus('Error: Could not find selected mesh.', 'error');
+                }
+                URL.revokeObjectURL(url);
+            });
+        });
+
+        processBtn.addEventListener('click', () => {
+            if (!originalModel) return;
+            logStatus('Processing: Removing rig...');
+            
+            const staticModel = new THREE.Group();
+            originalModel.traverse(child => {
+                if (child.isSkinnedMesh) staticModel.add(new THREE.Mesh(child.geometry, child.material));
+                else if (child.isMesh) staticModel.add(child.clone());
+            });
+            
+            staticModel.applyMatrix4(originalModel.matrixWorld);
+            scene.remove(currentModel);
+            currentModel = staticModel;
+            scene.add(currentModel);
+            
+            logStatus('Rig removed. Ready to export.');
+            populateMeshSelector(currentModel);
+            exportBtn.disabled = false;
+            processBtn.disabled = true;
+        });
+
+        exportBtn.addEventListener('click', () => {
+            if (!currentModel) return;
+            logStatus('Exporting to GLB...');
+            
+            new GLTFExporter().parse(currentModel, result => {
+                const blob = new Blob([result], { type: 'model/gltf-binary' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'model_static.glb';
+                link.click();
+                URL.revokeObjectURL(link.href);
+                logStatus('Export complete!');
+            }, error => {
+                logStatus('Export failed. See console.', 'error');
+                console.error('An error happened during parsing', error);
+            }, { binary: true });
+        });
+
+        debugToggle.addEventListener('change', e => {
+            if (boundingBoxHelper) boundingBoxHelper.visible = e.target.checked;
+        });
+
+        const resizeObserver = new ResizeObserver(entries => {
+            const { width, height } = entries[0].contentRect;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        });
+        resizeObserver.observe(viewerContainer);
+        
+        init();
+    </script>
+</body>
+</html>
